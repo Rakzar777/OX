@@ -136,7 +136,13 @@ def build_dispatcher(service):
         await state.clear()
         await state.update_data(event_id=event_id, tariff_id=tariff_id)
         text = f"<b>{esc(item['name'])} — {rub(int(item['price']*100))}</b>\n\n{esc(item['description'])}"
-        text += "\n\nНажимая «Оформить», ты соглашаешься с Правилами мероприятия, Политикой конфиденциальности и Офертой."
+        def document_link(label, url):
+            return f'<a href="{esc(url, quote=True)}">{label}</a>' if url else label
+
+        text += ("\n\nНажимая «Оформить», ты соглашаешься с "
+            + document_link("Правилами мероприятия", service.settings.rules_url) + ", "
+            + document_link("Политикой конфиденциальности", service.settings.privacy_url) + " и "
+            + document_link("условиями Оферты", service.settings.offer_url) + ".")
         rows = [[("Оформить", "checkout")]]
         for title, url in (("Правила",service.settings.rules_url),("Политика",service.settings.privacy_url),("Оферта",service.settings.offer_url)):
             if url:

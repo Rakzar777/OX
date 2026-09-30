@@ -13,13 +13,14 @@
     <div class="detail"><span>Билет</span><strong>№ {{ ticket.position }} · {{ ticket.id[:8]|upper }}</strong></div>
     <div class="status"><span class="dot"></span>{{ label }}</div>
     {% if status == 'active' %}
+      <p class="note"><strong>Гостям: не отмечайте билет самостоятельно.</strong><br>Покажите QR-код волонтёру на входе. Дождитесь, пока он отсканирует код и отметит билет, затем проходите. Отменить отметку нельзя.</p>
       {% if confirm %}
       <h2>Отметить использованным?</h2><p class="note">Отменить это действие нельзя. После отметки повторный вход по билету недоступен.</p>
       <form action="/t/{{ ticket.token }}/redeem" method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button" type="submit">Да, отметить использованным</button></form>
       <a class="back" href="/t/{{ ticket.token }}">Назад</a>
       {% else %}
       <a class="button" href="/t/{{ ticket.token }}?confirm=true">Отметить использованным <span>↗</span></a>
-      <p class="note">Нажимай только при проходе на мероприятие.<br>Отменить отметку нельзя.</p>
+      <p class="note">Кнопка для волонтёра на входе. Нажимайте только при фактическом проходе гостя.</p>
       {% endif %}
     {% elif status == 'used' %}
       <p class="note">Отмечен {{ used_at }} МСК.<br>Повторный вход по этому билету недоступен.</p>

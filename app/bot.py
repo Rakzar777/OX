@@ -42,7 +42,7 @@ def menu(service):
 
 def event_text(event):
     start = dt(event["starts_at"]).astimezone(MSK).strftime("%d.%m.%Y · %H:%M")
-    return f"<b>{esc(event['title'])}</b>\n\n{start} МСК\n{esc(event['venue'])}\n\n{esc(event.get('age', ''))}"
+    return f"<b>{esc(event['title'])}</b>\n\n{start} МСК\n{esc(event['venue'])}\n\n{esc(event.get('age', ''))}" + ("\n\n" + esc(event['description']) if event.get('description') else "")
 
 
 async def send_ticket(bot, service, chat_id, ticket):
@@ -52,8 +52,8 @@ async def send_ticket(bot, service, chat_id, ticket):
     qr.save(stream, format="PNG")
     status = "Возврат в обработке" if ticket["order_status"] == "refund_pending" else "Активен"
     text = (event_text(snap["event"]) + f"\n\n{esc(snap['tariff']['name'])} · билет № {ticket['position']}"
-        + f"\nСтатус: {status}\n\nНе пересылай QR посторонним. Кто первым пройдёт по билету, тот его использует. Повторный вход недоступен.")
-    rows = [[("Отправить билет", "send:" + ticket["id"])]]
+        + f"\nСтатус: {status}\n\nПокажи QR-код волонтёру на входе. Дождись, пока он отсканирует код и отметит билет, затем проходи.\n\nНе нажимай «Отметить использованным» самостоятельно: отменить отметку нельзя, повторный вход недоступен.\n\nБилет можно переслать другу обычным сообщением в Telegram. Один QR-код — один проход.")
+    rows = []
     if ticket["order_status"] == "paid":
         rows.append([("Вернуть заказ — 6 билетов" if snap["tariff"]["quantity"] == 6 else "Вернуть билет", "refund:" + ticket["order_id"])])
     rows.append([("Мои билеты", "tickets"), ("Главное меню", "home")])
@@ -73,7 +73,7 @@ def build_dispatcher(service):
         if not event:
             raise BusinessError("Продажи завершены.")
         rows = [[(t["name"] + " — " + rub(int(t["price"] * 100)), "tariff:" + event_id + ":" + t["id"])] for t in event["tariffs"]]
-        rows += [[("Промокод", "promo")], [("Назад", "home")]]
+        rows += [[("Назад", "home")]]
         await message.answer(event_text(event), parse_mode="HTML", reply_markup=keyboard(rows))
 
     async def show_tickets(message, user_id):
@@ -95,7 +95,7 @@ def build_dispatcher(service):
                 await message.answer("Проверяем оплату. Обычно это занимает меньше минуты. Билеты появятся в «Моих билетах».", reply_markup=menu(service))
             return
         await message.answer("Хочешь на вечеринку в Санкт-Петербурге? Ты по адресу.\n\n"
-            "Косплей-пати\nhttps://t.me/OX_PARTY\n\nВечеринки для студентов\nhttps://t.me/xoxoxoxoparty\n\n"
+            "TG вечеринки\nhttps://t.me/OX_PARTY\n\n"
             "Группа в VK\nhttps://vk.com/ohhhparty", reply_markup=menu(service))
 
     @router.callback_query(F.data == "home")
@@ -123,10 +123,6 @@ def build_dispatcher(service):
         await state.clear()
         await show_event(cb.message, cb.data.split(":", 1)[1])
 
-    @router.callback_query(F.data == "promo")
-    async def promo(cb):
-        await cb.answer("Промокоды пока недоступны.", show_alert=True)
-
     @router.callback_query(F.data.startswith("tariff:"))
     async def tariff(cb, state: FSMContext):
         await cb.answer()
@@ -140,7 +136,7 @@ def build_dispatcher(service):
         await state.clear()
         await state.update_data(event_id=event_id, tariff_id=tariff_id)
         text = f"<b>{esc(item['name'])} — {rub(int(item['price']*100))}</b>\n\n{esc(item['description'])}"
-        text += "\n\nНажимая «К оплате», ты соглашаешься с Правилами мероприятия, Политикой конфиденциальности и Офертой."
+        text += "\n\nНажимая «Оформить», ты соглашаешься с Правилами мероприятия, Политикой конфиденциальности и Офертой."
         rows = [[("Оформить", "checkout")]]
         for title, url in (("Правила",service.settings.rules_url),("Политика",service.settings.privacy_url),("Оферта",service.settings.offer_url)):
             if url:
@@ -245,15 +241,6 @@ def build_dispatcher(service):
         await cb.answer()
         await state.clear()
         await show_tickets(cb.message,cb.from_user.id)
-
-    @router.callback_query(F.data.startswith("send:"))
-    async def share(cb):
-        await cb.answer()
-        item = next((t for t in service.tickets(cb.from_user.id) if t["id"] == cb.data.split(":",1)[1]),None)
-        if not item:
-            raise BusinessError("Активный билет не найден.")
-        await send_ticket(cb.bot,service,cb.from_user.id,item)
-        await cb.message.answer("Перешли сообщение с QR другу средствами Telegram. Один билет — один проход.")
 
     @router.callback_query(F.data.startswith("refund:"))
     async def refund_confirm(cb):

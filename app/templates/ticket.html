@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>O.X. — билет</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><main>
+  <header><a class="brand" href="#">O.X.</a><span class="eyebrow">КОНТРОЛЬ БИЛЕТА</span></header>
+  {% if ticket %}
+  <article class="ticket {{ status }}">
+    <div class="ticket-top"><span class="eyebrow">NIGHTCLUB EVENT</span><span class="age">{{ event.age }}</span></div>
+    <h1>{{ event.title }}</h1>
+    <p class="when">{{ date }} <span>МСК</span></p><p class="venue">{{ event.venue }}</p>
+    <div class="tear"><i></i><span></span><i></i></div>
+    <div class="detail"><span>Тариф</span><strong>{{ tariff.name }}</strong></div>
+    <div class="detail"><span>Билет</span><strong>№ {{ ticket.position }} · {{ ticket.id[:8]|upper }}</strong></div>
+    <div class="status"><span class="dot"></span>{{ label }}</div>
+    {% if status == 'active' %}
+      {% if confirm %}
+      <h2>Отметить использованным?</h2><p class="note">Отменить это действие нельзя. После отметки повторный вход по билету недоступен.</p>
+      <form action="/t/{{ ticket.token }}/redeem" method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button" type="submit">Да, отметить использованным</button></form>
+      <a class="back" href="/t/{{ ticket.token }}">Назад</a>
+      {% else %}
+      <a class="button" href="/t/{{ ticket.token }}?confirm=true">Отметить использованным <span>↗</span></a>
+      <p class="note">Нажимай только при проходе на мероприятие.<br>Отменить отметку нельзя.</p>
+      {% endif %}
+    {% elif status == 'used' %}
+      <p class="note">Отмечен {{ used_at }} МСК.<br>Повторный вход по этому билету недоступен.</p>
+    {% elif status == 'refund_pending' %}
+      <p class="note">Пока возврат обрабатывается, отметка о проходе недоступна.</p>
+    {% else %}<p class="note">Вход по этому билету недоступен.</p>{% endif %}
+  </article>
+  {% else %}<article class="ticket"><h1>Билет не найден</h1><p class="note">Проверь ссылку или открой QR ещё раз.</p></article>{% endif %}
+  <footer>O.X. PARTIES <span>Один билет · один проход</span></footer>
+</main></body></html>

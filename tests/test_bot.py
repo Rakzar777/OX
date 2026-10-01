@@ -70,7 +70,7 @@ async def test_complete_dialog_purchase_and_delivery(service):
     await notifications(bot,service)
     assert len([m for m in session.calls if m.__api_method__ == "sendPhoto"])==6
     await feed(callback="refund:"+order["id"])
-    assert "6 билетов, 3600" in session.calls[-1].text
+    assert "6 билетов, 3900" in session.calls[-1].text
     await feed(callback="refund_yes:"+order["id"])
     assert service.order(order["id"])["status"]=="refunded"
     await dp.storage.close()

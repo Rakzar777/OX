@@ -61,8 +61,8 @@ async def test_concurrent_redemption_one_winner(service):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("at,allowed",[("2026-10-22T19:59:59+03:00",True),
-    ("2026-10-22T20:00:00+03:00",True),("2026-10-22T20:00:00.000001+03:00",False)])
+@pytest.mark.parametrize("at,allowed",[("2026-10-22T17:59:59+03:00",True),
+    ("2026-10-22T18:00:00+03:00",True),("2026-10-22T18:00:00.000001+03:00",False)])
 async def test_refund_boundary(service,at,allowed):
     oid,_ = await paid(service)
     service.now = lambda:datetime.fromisoformat(at)

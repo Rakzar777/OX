@@ -193,12 +193,12 @@ class Service:
         log.info("payment_%s order=%s late=%s", state, order_id, late)
 
     def tickets(self, user_id):
-        return self.db.all("""SELECT t.*,o.snapshot,o.status AS order_status FROM tickets t
+        return self.db.all("""SELECT t.*,o.snapshot,o.full_name,o.status AS order_status FROM tickets t
             JOIN orders o ON o.id=t.order_id WHERE o.user_id=? AND t.status='active'
             AND o.status IN ('paid','refund_pending') ORDER BY o.created_at DESC,t.position""", (user_id,))
 
     def ticket(self, token):
-        return self.db.one("""SELECT t.*,o.snapshot,o.status AS order_status FROM tickets t
+        return self.db.one("""SELECT t.*,o.snapshot,o.full_name,o.status AS order_status FROM tickets t
             JOIN orders o ON o.id=t.order_id WHERE t.token=?""", (token,))
 
     def redeem(self, token):

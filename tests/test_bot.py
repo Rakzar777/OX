@@ -75,3 +75,25 @@ async def test_complete_dialog_purchase_and_delivery(service):
     assert service.order(order["id"])["status"]=="refunded"
     await dp.storage.close()
     await bot.session.close()
+
+@pytest.mark.asyncio
+async def test_two_separate_orders_have_distinct_ticket_captions(service):
+    from conftest import paid
+    from app.bot import send_ticket
+    await paid(service, tariff='standard', order_id='a'*32)
+    await paid(service, tariff='standard', order_id='b'*32)
+    session = TelegramStub()
+    bot = Bot('123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi', session=session)
+    tickets = service.tickets(101)
+    assert len(tickets) == 2
+    for ticket in tickets:
+        await send_ticket(bot, service, 101, ticket)
+    photos = [m for m in session.calls if m.__api_method__ == 'sendPhoto']
+    assert len(photos) == 2
+    assert photos[0].caption != photos[1].caption
+    assert photos[0].photo.data != photos[1].photo.data
+    for photo, ticket in zip(photos, tickets):
+        assert ticket['id'][:8].upper() in photo.caption
+        assert ticket['full_name'] in photo.caption
+        assert len(photo.caption) <= 1024
+    await bot.session.close()

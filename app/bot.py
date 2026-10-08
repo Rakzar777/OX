@@ -51,8 +51,8 @@ async def send_ticket(bot, service, chat_id, ticket):
     stream = io.BytesIO()
     qr.save(stream, format="PNG")
     status = "Возврат в обработке" if ticket["order_status"] == "refund_pending" else "Активен"
-    text = (event_text(snap["event"]) + f"\n\n{esc(snap['tariff']['name'])} · билет № {ticket['position']}"
-        + f"\nСтатус: {status}\n\nПокажи QR-код волонтёру на входе. Дождись, пока он отсканирует код и отметит билет, затем проходи.\n\nНе нажимай «Отметить использованным» самостоятельно: отменить отметку нельзя, повторный вход недоступен.\n\nБилет можно переслать другу обычным сообщением в Telegram. Один QR-код — один проход.")
+    text = (event_text(snap["event"]) + f"\n\n{esc(snap['tariff']['name'])} · билет № {ticket['id'][:8].upper()}"
+        + f"\nПокупатель: {esc(ticket.get('full_name', '')[:100])}\nСтатус: {status}\n\nПокажи QR-код волонтёру на входе. Дождись, пока он отсканирует код и отметит билет, затем проходи.\n\nНе нажимай «Отметить использованным» самостоятельно: отменить отметку нельзя, повторный вход недоступен.\n\nБилет можно переслать другу обычным сообщением в Telegram. Один QR-код — один проход.")
     rows = []
     if ticket["order_status"] == "paid":
         rows.append([("Вернуть заказ — 6 билетов" if snap["tariff"]["quantity"] == 6 else "Вернуть билет", "refund:" + ticket["order_id"])])
@@ -81,7 +81,7 @@ def build_dispatcher(service):
         if not tickets:
             await message.answer("У тебя пока нет активных билетов.", reply_markup=menu(service))
             return
-        await message.answer("Твои активные билеты:")
+        await message.answer(f"Активных билетов: {len(tickets)}. Ниже — отдельный QR-код для каждого билета.")
         for ticket in tickets:
             await send_ticket(message.bot,service,user_id,ticket)
 

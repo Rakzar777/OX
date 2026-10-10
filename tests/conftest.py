@@ -48,7 +48,7 @@ def service(tmp_path):
     settings = Settings(database_path=str(tmp_path / "test.sqlite3"),bot_username="test_bot")
     db = Database(settings.database_path)
     db.migrate()
-    db.seed(Path(__file__).parents[1] / "events.json")
+    db.seed(Path(__file__).parent / "events.json")
     return Service(db,settings,FakeProvider(),now=lambda:datetime(2026,10,20,9,tzinfo=timezone.utc))
 
 

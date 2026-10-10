@@ -106,6 +106,10 @@ class Service:
                 raise BusinessError("Продажи завершены.")
             if order["status"] not in ("new", "pending"):
                 raise BusinessError("Этот заказ уже обработан. Открой «Мои билеты» или начни новую покупку.")
+            current_event = self.event(order["event_id"])
+            tariff_id = json.loads(order["snapshot"])["tariff"]["id"]
+            if not any(t["id"] == tariff_id for t in current_event["tariffs"]):
+                raise BusinessError("Этот тариф больше не продаётся. Выбери другой через «Купить билет».")
             payment = self.db.one("SELECT * FROM payments WHERE order_id=?", (order_id,))
             if payment and payment["url"] and payment["status"] == "pending":
                 return payment["url"]

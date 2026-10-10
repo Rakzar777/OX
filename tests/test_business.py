@@ -198,3 +198,16 @@ async def test_hidden_event_preserves_tickets(service,tmp_path):
     service.db.seed(events)
     assert not service.events()
     assert len(service.tickets(101)) == 6
+
+@pytest.mark.asyncio
+async def test_removed_tariff_cannot_start_payment(service):
+    import json
+    from app.service import BusinessError
+    service.create_order('removed',101,'halloween-2026','company','test@example.com','Test Buyer','+79991234567')
+    event = service.event('halloween-2026')
+    event['tariffs'] = [t for t in event['tariffs'] if t['id'] != 'company']
+    with service.db.transaction() as con:
+        con.execute('UPDATE events SET data=? WHERE id=?',(json.dumps(event),'halloween-2026'))
+    with pytest.raises(BusinessError, match='больше не продаётся'):
+        await service.pay('removed',101)
+    assert not service.provider.payment_keys

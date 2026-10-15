@@ -21,3 +21,14 @@ def test_public_address_must_be_https_origin(url):
 def test_live_requires_real_documents():
     with pytest.raises(ValueError,match="RULES_URL"):
         Settings(bot_token="test",shop_id="1",secret_key="test",public_base_url="https://tickets.test",test=False).validate()
+
+
+def test_existing_database_guard_rejects_missing_or_empty_volume(tmp_path):
+    path = tmp_path / "missing.sqlite3"
+    settings = Settings(bot_token="test", payments_enabled=False,
+                        database_path=str(path), require_existing_database=True)
+    with pytest.raises(ValueError, match="Рабочая база отсутствует"):
+        settings.validate()
+    path.touch()
+    with pytest.raises(ValueError, match="Рабочая база отсутствует"):
+        settings.validate()

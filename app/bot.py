@@ -45,6 +45,12 @@ def event_text(event):
     return f"<b>{esc(event['title'])}</b>\n\n{start} МСК\n{esc(event['venue'])}\n\n{esc(event.get('age', ''))}" + ("\n\n" + esc(event['description']) if event.get('description') else "")
 
 
+def canceled_payment_text(order):
+    return (f"Оплата заказа № {order['id'][:8].upper()} на {rub(order['amount'])} не завершена.\n\n"
+            "Это сообщение относится только к этой попытке оплаты. "
+            "Если ты оплатил другой заказ, его билеты доступны в «Моих билетах».")
+
+
 async def send_ticket(bot, service, chat_id, ticket):
     snap = json.loads(ticket["snapshot"])
     qr = qrcode.make(service.settings.public_base_url + "/t/" + ticket["token"])
@@ -77,6 +83,8 @@ def build_dispatcher(service):
         await message.answer(event_text(event), parse_mode="HTML", reply_markup=keyboard(rows))
 
     async def show_tickets(message, user_id):
+        if service.settings.payments_enabled:
+            await service.refresh_pending_payments(user_id)
         tickets = service.tickets(user_id)
         if not tickets:
             await message.answer("У тебя пока нет активных билетов.", reply_markup=menu(service))
@@ -230,12 +238,12 @@ def build_dispatcher(service):
     @router.callback_query(F.data.startswith("check:"))
     async def check(cb):
         await cb.answer()
-        order = service.order(cb.data.split(":",1)[1],cb.from_user.id)
+        order = await service.refresh_payment(cb.data.split(":",1)[1],cb.from_user.id)
         if order["status"] == "paid":
             await show_tickets(cb.message,cb.from_user.id)
         else:
             texts = {"pending":"Проверяем оплату. Билеты появятся в «Моих билетах».",
-                "canceled":"Оплата не завершена. Попробуй ещё раз, если билет всё ещё нужен.",
+                "canceled":canceled_payment_text(order),
                 "error":"Не удалось создать оплату. Напиши менеджеру.",
                 "refund_pending":"Обрабатываем возврат.","refunded":"Возврат оформлен. Билеты недействительны.",
                 "late_paid":"Оплата поступила после закрытия продаж. Оформляем полный возврат.",
@@ -307,7 +315,7 @@ async def notifications(bot, service):
                     for ticket in items:
                         await send_ticket(bot,service,order["user_id"],ticket)
             else:
-                text = {"canceled":"Оплата не завершена. Попробуй ещё раз, если билет всё ещё нужен.",
+                text = {"canceled":canceled_payment_text(order),
                     "refunded":"Возврат оформлен. Билеты больше недействительны.",
                     "late_paid":"Оплата поступила после закрытия продаж. Оформляем полный возврат.",
                     "late_refund_error":"Оплата поступила после закрытия продаж. Для возврата напиши менеджеру.",

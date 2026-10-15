@@ -211,3 +211,42 @@ async def test_removed_tariff_cannot_start_payment(service):
     with pytest.raises(BusinessError, match='больше не продаётся'):
         await service.pay('removed',101)
     assert not service.provider.payment_keys
+
+
+@pytest.mark.asyncio
+async def test_lost_webhook_recovered_without_duplicate_charge_or_tickets(service):
+    oid = "f" * 32
+    service.create_order(oid, 101, "halloween-2026", "standard", "a@example.com", "Имя", "+79991234567")
+    await service.pay(oid, 101)
+    payment = service.db.one("SELECT * FROM payments WHERE order_id=?", (oid,))
+    service.provider.payments[payment["id"]].update(status="succeeded", paid=True,
+        captured_at=service.provider.captured_at)
+    assert not service.tickets(101)
+    await service.maintain()
+    original = service.tickets(101)
+    assert len(original) == 1
+    await service.refresh_payment(oid, 101)
+    await service.payment_webhook(payment["id"])
+    assert service.tickets(101) == original
+    assert len(service.provider.payment_keys) == 1
+    assert json.loads(payment["payload"])["metadata"]["telegram_user_id"] == "101"
+
+
+@pytest.mark.asyncio
+async def test_manual_payment_check_rejects_other_owner(service):
+    oid, _ = await paid(service, "standard")
+    with pytest.raises(BusinessError):
+        await service.refresh_payment(oid, 202)
+
+
+@pytest.mark.asyncio
+async def test_unavailable_provider_preserves_tickets(service):
+    await paid(service, "standard")
+    service.create_order("pending", 101, "halloween-2026", "vip", "a@example.com", "Имя", "+79991234567")
+    await service.pay("pending", 101)
+    async def unavailable(_):
+        raise ProviderError()
+    service.provider.get_payment = unavailable
+    await service.refresh_pending_payments(101)
+    assert len(service.tickets(101)) == 1
+    assert service.order("pending")["status"] == "pending"

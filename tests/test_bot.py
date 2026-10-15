@@ -97,3 +97,46 @@ async def test_two_separate_orders_have_distinct_ticket_captions(service):
         assert ticket['full_name'] in photo.caption
         assert len(photo.caption) <= 1024
     await bot.session.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_attempt_does_not_claim_successful_ticket_is_lost(service):
+    from conftest import paid
+    await paid(service, "standard")
+    service.create_order("b" * 32, 101, "halloween-2026", "vip", "a@example.com", "Имя", "+79991234567")
+    await service.pay("b" * 32, 101)
+    payment = service.db.one("SELECT * FROM payments WHERE order_id=?", ("b" * 32,))
+    service.provider.payments[payment["id"]]["status"] = "canceled"
+    await service.payment_webhook(payment["id"])
+    session = TelegramStub()
+    bot = Bot("123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi", session=session)
+    await notifications(bot, service)
+    texts = [m.text for m in session.calls if m.__api_method__ == "sendMessage"]
+    assert any("BBBBBBBB" in t and "1490" in t and "только к этой попытке" in t for t in texts)
+    assert len(service.tickets(101)) == 1
+    await bot.session.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("button", ["check:", "tickets"])
+async def test_user_buttons_recover_success_without_webhook(service, button):
+    oid = "f" * 32
+    service.create_order(oid, 101, "halloween-2026", "vip", "a@example.com", "Имя", "+79991234567")
+    await service.pay(oid, 101)
+    payment = service.db.one("SELECT * FROM payments WHERE order_id=?", (oid,))
+    service.provider.payments[payment["id"]].update(status="succeeded", paid=True,
+        captured_at=service.provider.captured_at)
+    session = TelegramStub()
+    bot = Bot("123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi", session=session)
+    dp = build_dispatcher(service)
+    update = Update.model_validate({"update_id": 1, "callback_query": {
+        "id": "1", "from": {"id": 101, "is_bot": False, "first_name": "Имя"},
+        "chat_instance": "test", "data": button + oid if button == "check:" else button,
+        "message": {"message_id": 2, "date": datetime.now(timezone.utc),
+                    "chat": {"id": 101, "type": "private"}, "text": "Оплата"}}})
+    await dp.feed_update(bot, update)
+    assert service.order(oid)["status"] == "paid"
+    assert len([m for m in session.calls if m.__api_method__ == "sendPhoto"]) == 1
+    assert len(service.provider.payment_keys) == 1
+    await dp.storage.close()
+    await bot.session.close()

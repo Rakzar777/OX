@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import secrets
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -39,6 +40,7 @@ class Service:
         # One process by design. SQLite transactions also protect redemption across threads.
         self.payment_lock = asyncio.Lock()
         self.refund_lock = asyncio.Lock()
+        self.payment_checks = {}
 
     def events(self):
         result = [json.loads(r["data"]) for r in self.db.all("SELECT data FROM events WHERE enabled=1")]
@@ -117,7 +119,9 @@ class Service:
                 payload = {"amount": {"value": money(order["amount"]), "currency": "RUB"}, "capture": True,
                     "confirmation": {"type": "redirect", "return_url": self.settings.public_base_url + "/payment-return"},
                     "description": "Билеты, заказ " + order_id,
-                    "metadata": {"order_id": order_id}, "receipt": self.receipt(order)}
+                    "metadata": {"order_id": order_id, "telegram_user_id": str(user_id),
+                        "event_id": order["event_id"], "tariff_id": tariff_id,
+                        "quantity": str(order["quantity"])}, "receipt": self.receipt(order)}
                 with self.db.transaction() as con:
                     con.execute("INSERT INTO payments(order_id,idem_key,payload,created_at) VALUES(?,?,?,?)",
                                 (order_id, str(uuid.uuid4()), json.dumps(payload), self.now().timestamp()))
@@ -195,6 +199,39 @@ class Service:
                     con.execute("INSERT OR IGNORE INTO tickets(id,order_id,position,token) VALUES(?,?,?,?)",
                                 (uuid.uuid4().hex,order_id,n+1,secrets.token_urlsafe(32)))
         log.info("payment_%s order=%s late=%s", state, order_id, late)
+
+    async def refresh_payment(self, order_id, user_id=None):
+        self.order(order_id, user_id)  # Check ownership before calling the provider.
+        async with self.payment_lock:
+            payment = self.db.one("SELECT * FROM payments WHERE order_id=?", (order_id,))
+            if payment and payment["id"] and payment["status"] in ("pending", "creating"):
+                self.payment_checks[payment["id"]] = time.monotonic()
+                await self.payment_webhook(payment["id"])
+        return self.order(order_id, user_id)
+
+    async def refresh_pending_payments(self, user_id=None, limit=20):
+        sql = """SELECT p.id,p.order_id FROM payments p JOIN orders o ON o.id=p.order_id
+            WHERE p.id IS NOT NULL AND p.status IN ('pending','creating')"""
+        rows = self.db.all(sql + (" AND o.user_id=?" if user_id is not None else ""),
+                           (user_id,) if user_id is not None else ())
+        # Rotate through pending payments so one long-lived payment cannot starve others.
+        rows.sort(key=lambda p: self.payment_checks.get(p["id"], 0))
+        try:
+            # A provider outage must not prevent access to already issued tickets.
+            async with asyncio.timeout(8 if user_id is not None else 30):
+                for payment in rows[:limit]:
+                    if (user_id is None and payment["id"] in self.payment_checks
+                            and time.monotonic() - self.payment_checks[payment["id"]] < 60):
+                        continue
+                    try:
+                        await self.refresh_payment(payment["order_id"], user_id)
+                    except (ProviderError, ValueError):
+                        log.warning("payment_check_deferred order=%s", payment["order_id"])
+        except TimeoutError:
+            log.warning("pending_payment_checks_timed_out")
+        if user_id is None:
+            pending = {p["id"] for p in rows}
+            self.payment_checks = {k: v for k, v in self.payment_checks.items() if k in pending}
 
     def tickets(self, user_id):
         return self.db.all("""SELECT t.*,o.snapshot,o.full_name,o.status AS order_status FROM tickets t
@@ -309,8 +346,7 @@ class Service:
         log.info("refund_%s order=%s",status,order["id"])
 
     async def maintain(self):
-        # Only retry requests whose result is uncertain, and monitor initiated refunds.
-        # Payment completion is processed exclusively through a verified webhook.
+        # Recover lost callbacks through the same authenticated provider verification.
         for p in self.db.all("SELECT * FROM payments WHERE status='creating'"):
             try:
                 async with self.payment_lock:
@@ -319,6 +355,7 @@ class Service:
                         await self._create_payment(fresh)
             except (ProviderError, BusinessError, ValueError):
                 log.warning("payment_retry_deferred order=%s", p["order_id"])
+        await self.refresh_pending_payments()
         for o in self.db.all("SELECT id FROM orders WHERE status='late_paid'"):
             try:
                 await self.refund(o["id"], late=True)

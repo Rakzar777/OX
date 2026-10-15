@@ -16,6 +16,7 @@ class Settings:
     test: bool = True
     payments_enabled: bool = True
     database_path: str = "data/bot.sqlite3"
+    require_existing_database: bool = False
     events_file: str = "events.json"
     manager: str = "Al_limm"
     rules_url: str = ""
@@ -40,6 +41,7 @@ class Settings:
             test=os.getenv("YOOKASSA_TEST", "true").lower() == "true",
             payments_enabled=os.getenv("PAYMENTS_ENABLED", "true").lower() == "true",
             database_path=os.getenv("DATABASE_PATH", "data/bot.sqlite3"),
+            require_existing_database=os.getenv("REQUIRE_EXISTING_DATABASE", "false").lower() == "true",
             events_file=os.getenv("EVENTS_FILE", "events.json"),
             manager=os.getenv("MANAGER_USERNAME", "Al_limm").lstrip("@"),
             rules_url=os.getenv("RULES_URL", ""),
@@ -54,6 +56,10 @@ class Settings:
         )
 
     def validate(self):
+        if self.require_existing_database:
+            database = Path(self.database_path)
+            if not database.is_file() or database.stat().st_size == 0:
+                raise ValueError("Рабочая база отсутствует: восстановите DATABASE_PATH из резервной копии")
         if not self.payments_enabled:
             if not self.bot_token:
                 raise ValueError("Заполните .env: BOT_TOKEN")

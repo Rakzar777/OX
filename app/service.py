@@ -49,6 +49,15 @@ class Service:
     def event(self, event_id):
         return next((e for e in self.events() if e["id"] == event_id), None)
 
+    def sales_closed_notice(self, event_id=None):
+        rows = self.db.all("SELECT data,enabled FROM events" + (" WHERE id=?" if event_id else ""),
+                           (event_id,) if event_id else ())
+        for row in rows:
+            event = json.loads(row["data"])
+            if (not row["enabled"] or self.now() >= dt(event["sales_close_at"])) and event.get("sales_closed_notice"):
+                return event["sales_closed_notice"]
+        return "Продажи завершены."
+
     def order(self, order_id, user_id=None):
         order = self.db.one("SELECT * FROM orders WHERE id=?", (order_id,))
         if not order or (user_id is not None and order["user_id"] != user_id):
@@ -60,7 +69,7 @@ class Service:
             raise BusinessError("Оплата скоро появится. Пока можно посмотреть тарифы или написать менеджеру.")
         event = self.event(event_id)
         if not event:
-            raise BusinessError("Продажи завершены.")
+            raise BusinessError(self.sales_closed_notice(event_id))
         tariff = next((t for t in event["tariffs"] if t["id"] == tariff_id), None)
         if not tariff:
             raise BusinessError("Тариф недоступен. Выбери другой.")
@@ -105,7 +114,7 @@ class Service:
             order = self.order(order_id, user_id)
             event = json.loads(order["snapshot"])["event"]
             if self.now() >= dt(event["sales_close_at"]) or not self.event(order["event_id"]):
-                raise BusinessError("Продажи завершены.")
+                raise BusinessError(self.sales_closed_notice(order["event_id"]))
             if order["status"] not in ("new", "pending"):
                 raise BusinessError("Этот заказ уже обработан. Открой «Мои билеты» или начни новую покупку.")
             current_event = self.event(order["event_id"])

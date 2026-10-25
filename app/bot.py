@@ -36,8 +36,10 @@ def keyboard(rows):
 
 
 def menu(service):
-    return keyboard([[('Купить билет', 'buy')], [('Мои билеты', 'tickets')],
-        [('Задать вопрос', 'https://t.me/' + service.settings.manager)]])
+    rows = [[('Мои билеты', 'tickets')], [('Задать вопрос', 'https://t.me/' + service.settings.manager)]]
+    if service.events():
+        rows.insert(0, [('Купить билет', 'buy')])
+    return keyboard(rows)
 
 
 def event_text(event):
@@ -77,7 +79,7 @@ def build_dispatcher(service):
     async def show_event(message, event_id):
         event = service.event(event_id)
         if not event:
-            raise BusinessError("Продажи завершены.")
+            raise BusinessError(service.sales_closed_notice(event_id))
         rows = [[(t["name"] + " — " + rub(int(t["price"] * 100)), "tariff:" + event_id + ":" + t["id"])] for t in event["tariffs"]]
         rows += [[("Назад", "home")]]
         await message.answer(event_text(event), parse_mode="HTML", reply_markup=keyboard(rows))
@@ -87,7 +89,10 @@ def build_dispatcher(service):
             await service.refresh_pending_payments(user_id)
         tickets = service.tickets(user_id)
         if not tickets:
-            await message.answer("У тебя пока нет активных билетов.", reply_markup=menu(service))
+            text = "У тебя пока нет активных билетов."
+            if not service.events():
+                text += "\n\n" + service.sales_closed_notice()
+            await message.answer(text, reply_markup=menu(service))
             return
         await message.answer(f"Активных билетов: {len(tickets)}. Ниже — отдельный QR-код для каждого билета.")
         for ticket in tickets:
@@ -102,15 +107,16 @@ def build_dispatcher(service):
             if pending:
                 await message.answer("Проверяем оплату. Обычно это занимает меньше минуты. Билеты появятся в «Моих билетах».", reply_markup=menu(service))
             return
-        await message.answer("Хочешь на вечеринку в Санкт-Петербурге? Ты по адресу.\n\n"
-            "TG вечеринки\nhttps://t.me/OX_PARTY\n\n"
+        intro = "Хочешь на вечеринку в Санкт-Петербурге? Ты по адресу." if service.events() else service.sales_closed_notice()
+        await message.answer(intro + "\n\nTG вечеринки\nhttps://t.me/OX_PARTY\n\n"
             "Группа в VK\nhttps://vk.com/ohhhparty", reply_markup=menu(service))
 
     @router.callback_query(F.data == "home")
     async def home(cb, state: FSMContext):
         await cb.answer()
         await state.clear()
-        await cb.message.answer("Выбери действие.", reply_markup=menu(service))
+        text = "Выбери действие." if service.events() else service.sales_closed_notice()
+        await cb.message.answer(text, reply_markup=menu(service))
 
     @router.callback_query(F.data == "buy")
     async def buy(cb, state: FSMContext):
@@ -118,7 +124,7 @@ def build_dispatcher(service):
         await state.clear()
         events = service.events()
         if not events:
-            await cb.message.answer("Сейчас нет мероприятий в продаже.", reply_markup=menu(service))
+            await cb.message.answer(service.sales_closed_notice(), reply_markup=menu(service))
         elif len(events) == 1:
             await show_event(cb.message, events[0]["id"])
         else:
@@ -137,7 +143,7 @@ def build_dispatcher(service):
         _, event_id, tariff_id = cb.data.split(":")
         event = service.event(event_id)
         if not event:
-            raise BusinessError("Продажи завершены.")
+            raise BusinessError(service.sales_closed_notice(event_id))
         item = next((t for t in event["tariffs"] if t["id"] == tariff_id), None)
         if not item:
             raise BusinessError("Тариф недоступен.")
@@ -161,6 +167,9 @@ def build_dispatcher(service):
     @router.callback_query(F.data == "checkout")
     async def checkout(cb, state: FSMContext):
         await cb.answer()
+        if not service.events():
+            await state.clear()
+            raise BusinessError(service.sales_closed_notice())
         if not service.settings.payments_enabled:
             raise BusinessError("Оплата скоро появится. Пока можно посмотреть тарифы или написать менеджеру.")
         if not (await state.get_data()).get("tariff_id"):
@@ -278,7 +287,9 @@ def build_dispatcher(service):
 
     @router.message()
     async def fallback(message):
-        await message.answer("Для оформления используй кнопки. Если диалог прервался, начни с /start.",reply_markup=menu(service))
+        text = ("Для оформления используй кнопки. Если диалог прервался, начни с /start."
+                if service.events() else service.sales_closed_notice())
+        await message.answer(text, reply_markup=menu(service))
 
     @router.callback_query()
     async def stale(cb):

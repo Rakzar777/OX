@@ -26,6 +26,8 @@
       <p class="note">Отмечен {{ used_at }} МСК.<br>Повторный вход по этому билету недоступен.</p>
     {% elif status == 'refund_pending' %}
       <p class="note">Пока возврат обрабатывается, отметка о проходе недоступна.</p>
+    {% elif status == 'archived' %}
+      <p class="note">Билет на прошедшее мероприятие. Для новой вечеринки нужен отдельный билет.</p>
     {% else %}<p class="note">Вход по этому билету недоступен.</p>{% endif %}
   </article>
   {% else %}<article class="ticket"><h1>Билет не найден</h1><p class="note">Проверь ссылку или открой QR ещё раз.</p></article>{% endif %}

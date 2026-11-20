@@ -67,8 +67,11 @@ def create_app(service, lifespan=None):
         status = ticket["status"]
         if status == "active" and ticket["order_status"] == "refund_pending":
             status = "refund_pending"
+        elif status == "active" and not ticket["admission_enabled"]:
+            status = "archived"
         labels = {"active": "Билет активен", "used": "Билет использован", "refunded": "Билет возвращён",
-                  "canceled": "Билет недействителен", "refund_pending": "Возврат в обработке"}
+                  "canceled": "Билет недействителен", "refund_pending": "Возврат в обработке",
+                  "archived": "Мероприятие завершилось"}
         nonce = secrets.token_urlsafe(24)
         signature = hmac.new(csrf_key, (token + ":" + nonce).encode(), hashlib.sha256).hexdigest()
         response = templates.TemplateResponse(request=request, name="ticket.html", context={

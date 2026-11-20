@@ -244,23 +244,29 @@ class Service:
 
     def tickets(self, user_id):
         return self.db.all("""SELECT t.*,o.snapshot,o.full_name,o.status AS order_status FROM tickets t
-            JOIN orders o ON o.id=t.order_id WHERE o.user_id=? AND t.status='active'
+            JOIN orders o ON o.id=t.order_id JOIN events e ON e.id=o.event_id
+            WHERE o.user_id=? AND t.status='active'
+            AND COALESCE(json_extract(e.data,'$.admission_enabled'),1)=1
             AND o.status IN ('paid','refund_pending') ORDER BY o.created_at DESC,t.position""", (user_id,))
 
     def ticket(self, token):
-        return self.db.one("""SELECT t.*,o.snapshot,o.full_name,o.status AS order_status FROM tickets t
-            JOIN orders o ON o.id=t.order_id WHERE t.token=?""", (token,))
+        return self.db.one("""SELECT t.*,o.snapshot,o.full_name,o.status AS order_status,
+            COALESCE(json_extract(e.data,'$.admission_enabled'),1) AS admission_enabled FROM tickets t
+            JOIN orders o ON o.id=t.order_id JOIN events e ON e.id=o.event_id WHERE t.token=?""", (token,))
 
     def redeem(self, token):
         with self.db.transaction() as con:
-            row = con.execute("""SELECT t.id,t.status,o.status AS order_status FROM tickets t
-                JOIN orders o ON o.id=t.order_id WHERE t.token=?""", (token,)).fetchone()
+            row = con.execute("""SELECT t.id,t.status,o.status AS order_status,
+                COALESCE(json_extract(e.data,'$.admission_enabled'),1) AS admission_enabled FROM tickets t
+                JOIN orders o ON o.id=t.order_id JOIN events e ON e.id=o.event_id WHERE t.token=?""", (token,)).fetchone()
             if not row:
                 raise BusinessError("Билет не найден.")
             if row["status"] != "active":
                 raise BusinessError("Билет уже использован или недействителен.")
             if row["order_status"] != "paid":
                 raise BusinessError("Билет недоступен: обрабатывается возврат.")
+            if not row["admission_enabled"]:
+                raise BusinessError("Мероприятие завершилось. Для новой вечеринки нужен отдельный билет.")
             con.execute("UPDATE tickets SET status='used',used_at=? WHERE id=? AND status='active'",
                         (self.now().timestamp(),row["id"]))
         log.info("ticket_used id=%s", row["id"])

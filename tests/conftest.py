@@ -7,6 +7,32 @@ import pytest
 from app.config import Settings
 from app.db import Database
 from app.service import Service
+from app.volunteer import hash_password
+
+
+VOLUNTEER_TEST_PASSWORD = "fixture-volunteer-password"
+VOLUNTEER_TEST_HASH = hash_password(VOLUNTEER_TEST_PASSWORD)
+
+
+@pytest.fixture
+def volunteer_settings(service):
+    service.settings.public_base_url = "https://tickets.test"
+    service.settings.volunteer_username = "volunteer"
+    service.settings.volunteer_password_hash = VOLUNTEER_TEST_HASH
+    service.settings.volunteer_session_secret = "fixture-session-secret-" * 3
+    return service.settings
+
+
+async def login_volunteer(client, next_path="/volunteer"):
+    import re
+    response = await client.get("/volunteer/login", params={"next": next_path})
+    csrf = re.search(r'name="csrf" value="([^"]+)"', response.text).group(1)
+    result = await client.post("/volunteer/login", data={
+        "csrf": csrf, "username": "volunteer", "password": VOLUNTEER_TEST_PASSWORD,
+        "next": next_path,
+    })
+    assert result.status_code == 303
+    return result
 
 
 class FakeProvider:

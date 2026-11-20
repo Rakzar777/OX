@@ -4,20 +4,24 @@ import httpx
 import pytest
 
 from app.web import create_app
-from conftest import paid
+from conftest import paid, login_volunteer
 
 
 @pytest.mark.asyncio
-async def test_public_page_get_does_not_use_ticket_post_requires_csrf(service):
+async def test_public_page_get_does_not_use_ticket_post_requires_csrf(service, volunteer_settings):
     await paid(service,"standard")
     token = service.tickets(101)[0]["token"]
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(service)),base_url="http://127.0.0.1:8000") as client:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(service)),base_url=volunteer_settings.public_base_url) as client:
         page = await client.get("/t/"+token)
         assert page.status_code == 200
         assert "Билет активен" in page.text
         assert "buyer@example.com" not in page.text
         assert "Иван Иванов" not in page.text
         assert service.ticket(token)["status"] == "active"
+        assert (await client.post("/t/"+token+"/redeem")).status_code == 401
+        assert "Отметить использованным" not in page.text
+        assert "не отмечайте билет самостоятельно" not in page.text
+        await login_volunteer(client, "/t/" + token)
         assert (await client.post("/t/"+token+"/redeem")).status_code == 403
         page = await client.get("/t/"+token+"?confirm=true")
         csrf = re.search('name="csrf" value="([^"]+)"',page.text).group(1)

@@ -4,15 +4,18 @@ import re
 import secrets
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from .provider import ProviderError
 from .service import BusinessError, MSK, dt
+from .volunteer import SESSION_COOKIE, SESSION_SECONDS, VolunteerAuth
 
 ROOT = Path(__file__).parent
 
@@ -32,6 +35,49 @@ def create_app(service, lifespan=None):
     app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
     templates = Jinja2Templates(directory=ROOT / "templates")
     csrf_key = secrets.token_bytes(32)
+    auth = VolunteerAuth(service.settings)
+    volunteer_csrf_cookie = "__Host-ox_volunteer_csrf"
+
+    def csrf_pair(scope, nonce=None):
+        nonce = nonce or secrets.token_urlsafe(24)
+        signature = hmac.new(csrf_key, (scope + ":" + nonce).encode(), hashlib.sha256).hexdigest()
+        return nonce, nonce + "." + signature
+
+    def verify_csrf(request, value, scope, cookie_name):
+        nonce = request.cookies.get(cookie_name, "")
+        _, expected = csrf_pair(scope, nonce)
+        if not nonce or not hmac.compare_digest(value.encode(), expected.encode()):
+            raise HTTPException(403, "Обнови страницу и повтори действие")
+        origin = request.headers.get("origin")
+        if origin and origin != service.settings.public_base_url:
+            raise HTTPException(403)
+
+    async def form_values(request):
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > 4096:
+                raise HTTPException(413)
+        try:
+            return parse_qs(body.decode("utf-8"), max_num_fields=8)
+        except (UnicodeError, ValueError):
+            raise HTTPException(400) from None
+
+    def next_page(value):
+        if re.fullmatch(r"/t/[a-zA-Z0-9_-]{40,48}", value or ""):
+            return value
+        return "/volunteer"
+
+    def volunteer_page(request, next_path="/volunteer", error=None, status_code=200):
+        authenticated = auth.authenticated(request)
+        nonce, csrf = csrf_pair("volunteer", request.cookies.get(volunteer_csrf_cookie))
+        response = templates.TemplateResponse(request=request, name="volunteer.html", context={
+            "configured": auth.configured, "volunteer": authenticated, "csrf": csrf,
+            "next_path": next_path, "error": error,
+        }, status_code=status_code)
+        response.set_cookie(volunteer_csrf_cookie, nonce, httponly=True, secure=True,
+                            samesite="strict", max_age=900, path="/")
+        return response
 
     @app.middleware("http")
     async def security_headers(request, call_next):
@@ -55,6 +101,40 @@ def create_app(service, lifespan=None):
             "manager": service.settings.manager,
         })
 
+    @app.get("/volunteer", response_class=HTMLResponse)
+    @app.get("/volunteer/login", response_class=HTMLResponse)
+    async def volunteer_login(request: Request, next: str = "/volunteer"):
+        target = next_page(next)
+        if not auth.configured:
+            return volunteer_page(request, target, "Вход для волонтёров ещё не настроен.", 503)
+        if auth.authenticated(request) and target != "/volunteer":
+            return RedirectResponse(target, status_code=303)
+        return volunteer_page(request, target)
+
+    @app.post("/volunteer/login")
+    async def volunteer_sign_in(request: Request):
+        if not auth.configured:
+            raise HTTPException(503, "Вход для волонтёров ещё не настроен")
+        values = await form_values(request)
+        verify_csrf(request, values.get("csrf", [""])[0], "volunteer", volunteer_csrf_cookie)
+        username = values.get("username", [""])[0].strip()
+        password = values.get("password", [""])[0]
+        target = next_page(values.get("next", [""])[0])
+        if not await run_in_threadpool(auth.verify_credentials, username, password):
+            return volunteer_page(request, target, "Неверный логин или пароль.", 401)
+        response = RedirectResponse(target, status_code=303)
+        response.set_cookie(SESSION_COOKIE, auth.issue_session(), httponly=True, secure=True,
+                            samesite="lax", max_age=SESSION_SECONDS, path="/")
+        return response
+
+    @app.post("/volunteer/logout")
+    async def volunteer_sign_out(request: Request):
+        values = await form_values(request)
+        verify_csrf(request, values.get("csrf", [""])[0], "volunteer", volunteer_csrf_cookie)
+        response = RedirectResponse("/volunteer/login", status_code=303)
+        response.delete_cookie(SESSION_COOKIE, httponly=True, secure=True, samesite="lax", path="/")
+        return response
+
     @app.get("/t/{token}", response_class=HTMLResponse)
     async def ticket_page(request: Request, token: str, confirm: bool = False):
         if not re.fullmatch(r"[a-zA-Z0-9_-]{40,48}", token):
@@ -62,6 +142,9 @@ def create_app(service, lifespan=None):
         ticket = service.ticket(token)
         if not ticket:
             return templates.TemplateResponse(request=request, name="ticket.html", context={"ticket": None}, status_code=404)
+        volunteer = auth.authenticated(request)
+        if confirm and not volunteer:
+            return RedirectResponse("/volunteer/login?" + urlencode({"next": "/t/" + token}), status_code=303)
         import json
         snapshot = json.loads(ticket["snapshot"])
         status = ticket["status"]
@@ -72,34 +155,28 @@ def create_app(service, lifespan=None):
         labels = {"active": "Билет активен", "used": "Билет использован", "refunded": "Билет возвращён",
                   "canceled": "Билет недействителен", "refund_pending": "Возврат в обработке",
                   "archived": "Мероприятие завершилось"}
-        nonce = secrets.token_urlsafe(24)
-        signature = hmac.new(csrf_key, (token + ":" + nonce).encode(), hashlib.sha256).hexdigest()
+        nonce, csrf = csrf_pair(token)
+        logout_nonce, logout_csrf = csrf_pair("volunteer", request.cookies.get(volunteer_csrf_cookie))
         response = templates.TemplateResponse(request=request, name="ticket.html", context={
             "ticket": ticket, "event": snapshot["event"], "tariff": snapshot["tariff"],
             "status": status, "label": labels.get(status, "Билет недействителен"),
             "date": dt(snapshot["event"]["starts_at"]).astimezone(MSK).strftime("%d.%m.%Y · %H:%M"),
             "used_at": datetime.fromtimestamp(ticket["used_at"], MSK).strftime("%d.%m.%Y · %H:%M:%S") if ticket["used_at"] else None,
-            "confirm": confirm, "csrf": nonce + "." + signature,
+            "confirm": confirm, "csrf": csrf, "volunteer": volunteer, "logout_csrf": logout_csrf,
         })
-        response.set_cookie("ticket_csrf", nonce, httponly=True, secure=service.settings.public_base_url.startswith("https://"),
-                            samesite="strict", max_age=900, path="/t/" + token)
+        if volunteer:
+            response.set_cookie("ticket_csrf", nonce, httponly=True, secure=service.settings.public_base_url.startswith("https://"),
+                                samesite="strict", max_age=900, path="/t/" + token)
+            response.set_cookie(volunteer_csrf_cookie, logout_nonce, httponly=True, secure=True,
+                                samesite="strict", max_age=900, path="/")
         return response
 
     @app.post("/t/{token}/redeem")
     async def redeem(request: Request, token: str):
-        # Form is deliberately POST-only; link previews / QR scanners cannot consume tickets.
-        from urllib.parse import parse_qs
-        body = await request.body()
-        if len(body) > 2048:
-            raise HTTPException(400)
-        value = parse_qs(body.decode()).get("csrf", [""])[0]
-        nonce = request.cookies.get("ticket_csrf", "")
-        expected = nonce + "." + hmac.new(csrf_key, (token + ":" + nonce).encode(), hashlib.sha256).hexdigest()
-        if not nonce or not hmac.compare_digest(value, expected):
-            raise HTTPException(403, "Обнови страницу билета и повтори действие")
-        origin = request.headers.get("origin")
-        if origin and origin != service.settings.public_base_url:
-            raise HTTPException(403)
+        if not auth.authenticated(request):
+            raise HTTPException(401, "Войди как волонтёр для проверки билета")
+        values = await form_values(request)
+        verify_csrf(request, values.get("csrf", [""])[0], token, "ticket_csrf")
         try:
             service.redeem(token)
         except BusinessError:

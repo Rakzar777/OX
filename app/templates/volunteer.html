@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>O.X. — вход волонтёра</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><main>
+  <header><a class="brand" href="/volunteer">O.X.</a><span class="eyebrow">ПРОВЕРКА БИЛЕТОВ</span></header>
+  <article class="ticket">
+    {% if volunteer %}
+      <h1>Вход выполнен</h1>
+      <p class="note">Открой QR-код билета, проверь мероприятие и тариф, затем отметь проход гостя.</p>
+      <form action="/volunteer/logout" method="post" class="login-form">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="button" type="submit">Выйти</button>
+      </form>
+    {% else %}
+      <h1>Вход волонтёра</h1>
+      {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+      {% if configured %}
+        <form action="/volunteer/login" method="post" class="login-form">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="next" value="{{ next_path }}">
+          <label for="username">Логин</label>
+          <input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="128">
+          <label for="password">Пароль</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="256">
+          <button class="button" type="submit">Войти</button>
+        </form>
+      {% endif %}
+    {% endif %}
+  </article>
+  <footer>O.X. PARTIES <span>Контроль входа</span></footer>
+</main></body></html>

@@ -32,3 +32,11 @@ def test_existing_database_guard_rejects_missing_or_empty_volume(tmp_path):
     path.touch()
     with pytest.raises(ValueError, match="Рабочая база отсутствует"):
         settings.validate()
+
+
+def test_partial_volunteer_configuration_rejected_without_printing_values():
+    settings = Settings(bot_token="test", payments_enabled=False,
+                        volunteer_username="private-volunteer-value")
+    with pytest.raises(ValueError, match="VOLUNTEER_USERNAME") as error:
+        settings.validate()
+    assert "private-volunteer-value" not in str(error.value)

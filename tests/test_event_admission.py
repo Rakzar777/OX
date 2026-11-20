@@ -12,7 +12,7 @@ from aiogram.types import Update
 from app.bot import build_dispatcher
 from app.service import BusinessError
 from app.web import create_app
-from conftest import paid
+from conftest import paid, login_volunteer
 from test_bot import TelegramStub
 
 
@@ -21,15 +21,16 @@ DECEMBER = "ox-december-2026"
 
 
 @pytest.mark.asyncio
-async def test_archived_event_hidden_and_old_confirmation_cannot_redeem(service):
+async def test_archived_event_hidden_and_old_confirmation_cannot_redeem(service, volunteer_settings):
     await paid(service, "standard")
     ticket = service.tickets(101)[0]
     original = service.db.one("SELECT * FROM tickets WHERE id=?", (ticket["id"],))
     original_order = service.order(ticket["order_id"])
     app = create_app(service)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8000"
+        transport=httpx.ASGITransport(app=app), base_url=volunteer_settings.public_base_url
     ) as client:
+        await login_volunteer(client)
         page = await client.get("/t/" + ticket["token"] + "?confirm=true")
         csrf = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
 
@@ -48,7 +49,7 @@ async def test_archived_event_hidden_and_old_confirmation_cannot_redeem(service)
         assert page.status_code == 200
         assert "Мероприятие завершилось" in page.text
         assert "O.X. HALLOWEEN NIGHT" in page.text
-        assert '<form action=' not in page.text
+        assert 'action="/t/' not in page.text
         assert "Отметить использованным" not in page.text
 
     assert service.db.one("SELECT * FROM tickets WHERE id=?", (ticket["id"],)) == original

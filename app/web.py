@@ -49,7 +49,9 @@ def create_app(service, lifespan=None):
         if not nonce or not hmac.compare_digest(value.encode(), expected.encode()):
             raise HTTPException(403, "Обнови страницу и повтори действие")
         origin = request.headers.get("origin")
-        if origin and origin != service.settings.public_base_url:
+        # Privacy settings and cached pages can submit an opaque Origin.
+        # The signed CSRF token and its HttpOnly cookie were verified above.
+        if origin and origin != "null" and origin != service.settings.public_base_url:
             raise HTTPException(403)
 
     async def form_values(request):
@@ -82,7 +84,7 @@ def create_app(service, lifespan=None):
     @app.middleware("http")
     async def security_headers(request, call_next):
         response = await call_next(request)
-        response.headers.update({"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+        response.headers.update({"Cache-Control": "no-store", "Referrer-Policy": "same-origin",
             "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
             "X-Robots-Tag": "noindex, nofollow",
             "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; frame-ancestors 'none'; form-action 'self'; base-uri 'none'"})
@@ -116,10 +118,17 @@ def create_app(service, lifespan=None):
         if not auth.configured:
             raise HTTPException(503, "Вход для волонтёров ещё не настроен")
         values = await form_values(request)
-        verify_csrf(request, values.get("csrf", [""])[0], "volunteer", volunteer_csrf_cookie)
+        target = next_page(values.get("next", [""])[0])
+        try:
+            verify_csrf(request, values.get("csrf", [""])[0], "volunteer", volunteer_csrf_cookie)
+        except HTTPException as error:
+            if error.status_code != 403:
+                raise
+            return volunteer_page(
+                request, target, "Форма входа обновлена. Введи логин и пароль ещё раз.", 403
+            )
         username = values.get("username", [""])[0].strip()
         password = values.get("password", [""])[0]
-        target = next_page(values.get("next", [""])[0])
         if not await run_in_threadpool(auth.verify_credentials, username, password):
             return volunteer_page(request, target, "Неверный логин или пароль.", 401)
         response = RedirectResponse(target, status_code=303)

@@ -6,7 +6,7 @@ import pytest
 
 from app.volunteer import SESSION_COOKIE, SESSION_SECONDS, hash_password
 from app.web import create_app
-from conftest import login_volunteer, paid
+from conftest import VOLUNTEER_TEST_PASSWORD, login_volunteer, paid
 
 
 def csrf_from(page):
@@ -142,3 +142,55 @@ async def test_missing_credentials_keep_redemption_closed(service):
         assert (await client.get("/volunteer/login")).status_code == 503
         assert (await client.post("/volunteer/login")).status_code == 503
         assert (await client.post(path + "/redeem")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_private_browser_origin_can_log_in_and_redeem_with_valid_csrf(service, volunteer_settings):
+    await paid(service, "standard")
+    ticket = service.tickets(101)[0]
+    path = "/t/" + ticket["token"]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(service)),
+                                 base_url=volunteer_settings.public_base_url) as client:
+        login_page = await client.get("/volunteer/login")
+        assert login_page.headers["referrer-policy"] == "same-origin"
+        response = await client.post("/volunteer/login", headers={"Origin": "null"}, data={
+            "csrf": csrf_from(login_page), "username": "volunteer",
+            "password": VOLUNTEER_TEST_PASSWORD, "next": path,
+        })
+        assert response.status_code == 303
+        assert response.headers["location"] == path
+        confirmation = await client.get(path + "?confirm=true")
+        assert "Да, отметить использованным" in confirmation.text
+        response = await client.post(path + "/redeem", headers={"Origin": "null"},
+                                     data={"csrf": csrf_from(confirmation)})
+        assert response.status_code == 303
+        assert service.ticket(ticket["token"])["status"] == "used"
+
+
+@pytest.mark.asyncio
+async def test_opaque_origin_does_not_bypass_csrf_and_stale_form_recovers_as_html(service, volunteer_settings):
+    app = create_app(service)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                 base_url=volunteer_settings.public_base_url) as client:
+        stale_page = await client.get("/volunteer/login")
+        response = await client.post("/volunteer/login", headers={"Origin": "null"}, data={
+            "username": "volunteer", "password": VOLUNTEER_TEST_PASSWORD,
+        })
+        assert response.status_code == 403
+        assert response.headers["content-type"].startswith("text/html")
+        assert "Форма входа обновлена" in response.text
+        assert '<form action="/volunteer/login"' in response.text
+        assert SESSION_COOKIE not in client.cookies
+        # A refreshed form works without asking the user to clear cookies or change browsers.
+        response = await client.post("/volunteer/login", headers={"Origin": "null"}, data={
+            "csrf": csrf_from(response), "username": "volunteer", "password": VOLUNTEER_TEST_PASSWORD,
+        })
+        assert response.status_code == 303
+    # A form from before a server restart must receive a fresh, usable HTML form.
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(service)),
+                                 base_url=volunteer_settings.public_base_url, cookies=client.cookies) as restarted:
+        response = await restarted.post("/volunteer/login", headers={"Origin": "null"}, data={
+            "csrf": csrf_from(stale_page), "username": "volunteer", "password": VOLUNTEER_TEST_PASSWORD,
+        })
+        assert response.status_code == 403
+        assert response.headers["content-type"].startswith("text/html")
